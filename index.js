@@ -6,19 +6,20 @@ const qrcode = require('qrcode');
 // --- BANCO DE DADOS ---
 const db = new JsonDatabase({ databasePath: "./database.json" });
 
-// --- CONFIGURAÇÃO ---
+// --- CONFIGURAÇÃO FIXA ---
 const config = {
-    token: process.env.TOKEN || "SEU_TOKEN_AQUI",
-    client_id: process.env.CLIENT_ID || "ID_DO_BOT",
-    owner_id: process.env.OWNER_ID || "SEU_ID",
+    token: "MTUxNjUzMjg3MjA1MDM3Njg0NA.G0lOd_.fJBN5pZ6WrWnJ6H6tGVmruZ7mPd9Uny2OFAFUw",
+    client_id: "1516532872050376844",
+    owner_id: "1385438838670889042",
+    guild_id: "1516543103387828286",
     pix_key: db.get('config.pix') || "NÃO CONFIGURADO",
-    bot_name: db.get('config.name') || "SZZ VENDAS PRO",
+    bot_name: "LW ALUGUEL",
     color: db.get('config.color') || "#00FF00"
 };
 
-// --- WEB SERVER ---
+// --- WEB SERVER (KEEP ALIVE) ---
 const app = express();
-app.get('/', (req, res) => res.send('Bot Online!'));
+app.get('/', (req, res) => res.send('Bot LW ALUGUEL Online!'));
 app.listen(process.env.PORT || 8080);
 
 // --- CLIENT ---
@@ -36,13 +37,15 @@ const rest = new REST({ version: '10' }).setToken(config.token);
 
 (async () => {
     try {
-        console.log('🔄 Registrando comandos (/)...');
-        await rest.put(Routes.applicationCommands(config.client_id), { body: commands });
-        console.log('✅ Comandos registrados!');
-    } catch (error) { console.error(error); }
+        console.log('🔄 Registrando comandos (/) no servidor...');
+        await rest.put(Routes.applicationGuildCommands(config.client_id, config.guild_id), { body: commands });
+        console.log('✅ Comandos registrados com sucesso!');
+    } catch (error) { console.error('❌ Erro ao registrar comandos:', error); }
 })();
 
-client.once('ready', () => console.log(`🚀 ${client.user.tag} está online!`));
+client.once('ready', () => {
+    console.log(`🚀 ${client.user.tag} está online e pronto para vender!`);
+});
 
 // --- INTERAÇÕES ---
 client.on('interactionCreate', async (interaction) => {
@@ -68,9 +71,9 @@ client.on('interactionCreate', async (interaction) => {
         if (interaction.commandName === 'criar') {
             const modal = new ModalBuilder().setCustomId('modal_criar').setTitle('Novo Produto');
             modal.addComponents(
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('id').setLabel('ID do Produto').setStyle(TextInputStyle.Short).setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('id').setLabel('ID do Produto (ex: nitro)').setStyle(TextInputStyle.Short).setRequired(true)),
                 new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('nome').setLabel('Nome').setStyle(TextInputStyle.Short).setRequired(true)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('preco').setLabel('Preço').setStyle(TextInputStyle.Short).setRequired(true))
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('preco').setLabel('Preço (ex: 10.00)').setStyle(TextInputStyle.Short).setRequired(true))
             );
             await interaction.showModal(modal);
         }
@@ -87,8 +90,7 @@ client.on('interactionCreate', async (interaction) => {
 
             const row = new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId(`add_stock_${id}`).setLabel('Add Estoque').setStyle(ButtonStyle.Success),
-                new ButtonBuilder().setCustomId(`clear_stock_${id}`).setLabel('Limpar Estoque').setStyle(ButtonStyle.Danger),
-                new ButtonBuilder().setCustomId(`edit_prod_${id}`).setLabel('Editar Info').setStyle(ButtonStyle.Secondary)
+                new ButtonBuilder().setCustomId(`clear_stock_${id}`).setLabel('Limpar Estoque').setStyle(ButtonStyle.Danger)
             );
             await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
         }
@@ -112,13 +114,18 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
 
-    // 2. BOTÕES E MODAIS (Lógica de Venda e Gestão)
+    // 2. BOTÕES E MODAIS
     if (interaction.isButton()) {
-        const [action, subAction, id] = interaction.customId.split('_');
+        const parts = interaction.customId.split('_');
+        const action = parts[0];
+        const subAction = parts[1];
+        const id = parts[2];
 
         if (action === 'buy') {
             const prod = db.get(`prod_${id}`);
-            if (prod.estoque.length === 0) return interaction.reply({ content: "❌ Estoque esgotado!", ephemeral: true });
+            if (!prod || prod.estoque.length === 0) return interaction.reply({ content: "❌ Estoque esgotado!", ephemeral: true });
+
+            if (config.pix_key === "NÃO CONFIGURADO") return interaction.reply({ content: "❌ O dono ainda não configurou a chave PIX!", ephemeral: true });
 
             const pix_code = `00020126360014BR.GOV.BCB.PIX0114${config.pix_key}5204000053039865404${prod.preco}5802BR5908VENDEDOR6008BRASILIA62070503***6304`;
             const qrBuffer = await qrcode.toBuffer(pix_code);
@@ -137,6 +144,12 @@ client.on('interactionCreate', async (interaction) => {
             modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('itens').setLabel('Itens (um por linha)').setStyle(TextInputStyle.Paragraph).setRequired(true)));
             await interaction.showModal(modal);
         }
+
+        if (interaction.customId === 'edit_pix') {
+            const modal = new ModalBuilder().setCustomId('modal_conf_pix').setTitle('Configurar PIX');
+            modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('pix').setLabel('Chave PIX').setStyle(TextInputStyle.Short).setRequired(true)));
+            await interaction.showModal(modal);
+        }
     }
 
     if (interaction.type === InteractionType.ModalSubmit) {
@@ -145,16 +158,23 @@ client.on('interactionCreate', async (interaction) => {
             const nome = interaction.fields.getTextInputValue('nome');
             const preco = interaction.fields.getTextInputValue('preco');
             db.set(`prod_${id}`, { id, nome, preco, estoque: [] });
-            await interaction.reply({ content: `✅ Produto **${nome}** criado!`, ephemeral: true });
+            await interaction.reply({ content: `✅ Produto **${nome}** criado! Use \`/vender ${id}\` para anunciar.`, ephemeral: true });
         }
 
         if (interaction.customId.startsWith('modal_add_stock_')) {
             const id = interaction.customId.replace('modal_add_stock_', '');
-            const itens = interaction.fields.getTextInputValue('itens').split('\n');
+            const itens = interaction.fields.getTextInputValue('itens').split('\n').filter(i => i.trim() !== "");
             const prod = db.get(`prod_${id}`);
             prod.estoque.push(...itens);
             db.set(`prod_${id}`, prod);
             await interaction.reply({ content: `✅ ${itens.length} itens adicionados ao estoque de **${prod.nome}**!`, ephemeral: true });
+        }
+
+        if (interaction.customId === 'modal_conf_pix') {
+            const novaPix = interaction.fields.getTextInputValue('pix');
+            db.set('config.pix', novaPix);
+            config.pix_key = novaPix;
+            await interaction.reply({ content: "✅ Chave PIX atualizada!", ephemeral: true });
         }
     }
 });
