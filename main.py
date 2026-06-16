@@ -10,7 +10,7 @@ from flask import Flask
 from threading import Thread
 
 # --- CONFIGURAÇÃO ---
-TOKEN = os.getenv("TOKEN")
+TOKEN = os.getenv("MTUxNjUzMjg3MjA1MDM3Njg0NA.GXeARb.ycPfdGn0UUsIAXjEcVbmmZ2kGpB0Y2ujdY6Kps")
 OWNER_ID = 1385438838670889042
 BOT_NAME = "LW ALUGUEL ULTRA"
 EMBED_COLOR = 0x00FF00
