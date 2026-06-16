@@ -8,10 +8,8 @@ const db = new JsonDatabase({ databasePath: "./database.json" });
 
 // --- CONFIGURAÇÃO ---
 const config = {
-    token: process.env.TOKEN || "SEU_TOKEN_AQUI",
-    client_id: "1516532872050376844",
+    token: process.env.TOKEN || "MTUxNjUzMjg3MjA1MDM3Njg0NA.G0lOd_.fJBN5pZ6WrWnJ6H6tGVmruZ7mPd9Uny2OFAFUw",
     owner_id: "1385438838670889042",
-    guild_id: "1516543103387828286",
     pix_key: db.get('config.pix') || "NÃO CONFIGURADO",
     bot_name: "LW ALUGUEL",
     color: db.get('config.color') || "#00FF00",
@@ -34,14 +32,14 @@ const commands = [
 ].map(c => c.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(config.token);
-(async () => {
-    try {
-        await rest.put(Routes.applicationGuildCommands(config.client_id, config.guild_id), { body: commands });
-        console.log('✅ Comandos de Elite Registrados!');
-    } catch (e) { console.error(e); }
-})();
 
-client.once('ready', () => console.log(`🚀 ${client.user.tag} ONLINE!`));
+client.once('ready', async () => {
+    try {
+        console.log('🔄 Registrando comandos globais...');
+        await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
+        console.log(`🚀 ${client.user.tag} ONLINE e Comandos Registrados!`);
+    } catch (e) { console.error('Erro ao registrar comandos:', e); }
+});
 
 // --- FUNÇÕES AUXILIARES ---
 const getProductEmbed = (id) => {
