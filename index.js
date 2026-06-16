@@ -6,177 +6,205 @@ const qrcode = require('qrcode');
 // --- BANCO DE DADOS ---
 const db = new JsonDatabase({ databasePath: "./database.json" });
 
-// --- CONFIGURAÇÃO FIXA ---
+// --- CONFIGURAÇÃO ---
 const config = {
-    token: process.env.TOKEN,
+    token: process.env.TOKEN || "SEU_TOKEN_AQUI",
     client_id: "1516532872050376844",
     owner_id: "1385438838670889042",
     guild_id: "1516543103387828286",
     pix_key: db.get('config.pix') || "NÃO CONFIGURADO",
     bot_name: "LW ALUGUEL",
-    color: db.get('config.color') || "#00FF00"
+    color: db.get('config.color') || "#00FF00",
+    log_channel: db.get('config.log_channel') || null
 };
 
-// --- WEB SERVER (KEEP ALIVE) ---
+// --- WEB SERVER ---
 const app = express();
-app.get('/', (req, res) => res.send('Bot LW ALUGUEL Online!'));
+app.get('/', (req, res) => res.send('Super Bot LW ALUGUEL Online!'));
 app.listen(process.env.PORT || 8080);
 
 // --- CLIENT ---
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers] });
 
-// --- REGISTRO DE SLASH COMMANDS ---
+// --- REGISTRO DE COMANDOS ---
 const commands = [
-    new SlashCommandBuilder().setName('config').setDescription('Painel de configuração geral do bot'),
-    new SlashCommandBuilder().setName('criar').setDescription('Criar um novo produto'),
-    new SlashCommandBuilder().setName('gerenciar').setDescription('Abrir painel de gerenciamento de um produto').addStringOption(opt => opt.setName('id').setDescription('ID do produto').setRequired(true)),
-    new SlashCommandBuilder().setName('vender').setDescription('Enviar anúncio de venda de um produto').addStringOption(opt => opt.setName('id').setDescription('ID do produto').setRequired(true))
-].map(command => command.toJSON());
+    new SlashCommandBuilder().setName('painel').setDescription('Abre o painel principal de gerenciamento'),
+    new SlashCommandBuilder().setName('criar').setDescription('Cria um novo produto profissional'),
+    new SlashCommandBuilder().setName('vender').setDescription('Envia o anúncio de um produto').addStringOption(o => o.setName('id').setDescription('ID do produto').setRequired(true))
+].map(c => c.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(config.token);
-
 (async () => {
     try {
-        console.log('🔄 Registrando comandos (/) no servidor...');
         await rest.put(Routes.applicationGuildCommands(config.client_id, config.guild_id), { body: commands });
-        console.log('✅ Comandos registrados com sucesso!');
-    } catch (error) { console.error('❌ Erro ao registrar comandos:', error); }
+        console.log('✅ Comandos de Elite Registrados!');
+    } catch (e) { console.error(e); }
 })();
 
-client.once('ready', () => {
-    console.log(`🚀 ${client.user.tag} está online e pronto para vender!`);
-});
+client.once('ready', () => console.log(`🚀 ${client.user.tag} ONLINE!`));
+
+// --- FUNÇÕES AUXILIARES ---
+const getProductEmbed = (id) => {
+    const p = db.get(`prod_${id}`);
+    const embed = new EmbedBuilder()
+        .setTitle(p.nome)
+        .setDescription(p.desc || "Sem descrição.")
+        .setColor(config.color)
+        .setThumbnail(p.thumb || null)
+        .setImage(p.banner || null);
+    
+    if (p.planos && p.planos.length > 0) {
+        let planosText = "";
+        p.planos.forEach(pl => {
+            planosText += `🔹 **${pl.nome}**: R$ ${pl.preco} (Estoque: ${pl.estoque.length})\n`;
+        });
+        embed.addFields({ name: "📋 Planos Disponíveis", value: planosText });
+    } else {
+        embed.addFields({ name: "💰 Preço", value: `R$ ${p.preco}`, inline: true }, { name: "📦 Estoque", value: `${p.estoque.length}`, inline: true });
+    }
+    return embed;
+};
 
 // --- INTERAÇÕES ---
 client.on('interactionCreate', async (interaction) => {
-    // 1. SLASH COMMANDS
-    if (interaction.isChatInputCommand()) {
-        if (interaction.user.id !== config.owner_id) return interaction.reply({ content: "❌ Apenas o dono pode usar este comando.", ephemeral: true });
+    if (interaction.user.id !== config.owner_id && !interaction.customId?.startsWith('buy_')) {
+        if (interaction.isRepliable()) return interaction.reply({ content: "❌ Sem permissão.", ephemeral: true });
+    }
 
-        if (interaction.commandName === 'config') {
+    // 1. COMANDOS SLASH
+    if (interaction.isChatInputCommand()) {
+        if (interaction.commandName === 'painel') {
             const embed = new EmbedBuilder()
-                .setTitle(`⚙️ Configurações - ${config.bot_name}`)
+                .setTitle(`💎 Central de Comando - ${config.bot_name}`)
+                .setDescription("Gerencie seu bot e visualize estatísticas.")
                 .addFields(
-                    { name: "🔑 Chave PIX", value: `\`${config.pix_key}\``, inline: true },
-                    { name: "🎨 Cor", value: `\`${config.color}\``, inline: true }
-                )
-                .setColor(config.color);
+                    { name: "🔑 PIX", value: `\`${config.pix_key}\``, inline: true },
+                    { name: "📦 Produtos", value: `\`${Object.keys(db.all()).filter(k => k.startsWith('prod_')).length}\``, inline: true }
+                ).setColor(config.color);
             const row = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId('edit_pix').setLabel('Editar PIX').setStyle(ButtonStyle.Primary),
-                new ButtonBuilder().setCustomId('edit_visual').setLabel('Editar Nome/Cor').setStyle(ButtonStyle.Secondary)
+                new ButtonBuilder().setCustomId('conf_pix').setLabel('Configurar PIX').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('conf_logs').setLabel('Canal de Logs').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('conf_visual').setLabel('Personalizar Bot').setStyle(ButtonStyle.Secondary)
             );
             await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
         }
 
         if (interaction.commandName === 'criar') {
-            const modal = new ModalBuilder().setCustomId('modal_criar').setTitle('Novo Produto');
+            const modal = new ModalBuilder().setCustomId('modal_criar_full').setTitle('Criar Produto Profissional');
             modal.addComponents(
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('id').setLabel('ID do Produto (ex: nitro)').setStyle(TextInputStyle.Short).setRequired(true)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('nome').setLabel('Nome').setStyle(TextInputStyle.Short).setRequired(true)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('preco').setLabel('Preço (ex: 10.00)').setStyle(TextInputStyle.Short).setRequired(true))
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('id').setLabel('ID Único').setStyle(TextInputStyle.Short).setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('nome').setLabel('Nome do Produto').setStyle(TextInputStyle.Short).setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('preco').setLabel('Preço Base').setStyle(TextInputStyle.Short).setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('desc').setLabel('Descrição Completa').setStyle(TextInputStyle.Paragraph).setRequired(true))
             );
             await interaction.showModal(modal);
-        }
-
-        if (interaction.commandName === 'gerenciar') {
-            const id = interaction.options.getString('id');
-            const prod = db.get(`prod_${id}`);
-            if (!prod) return interaction.reply({ content: "❌ Produto não encontrado!", ephemeral: true });
-
-            const embed = new EmbedBuilder()
-                .setTitle(`🛠️ Gerenciar: ${prod.nome}`)
-                .setDescription(`ID: \`${id}\` | Preço: \`R$ ${prod.preco}\` | Estoque: \`${prod.estoque.length}\``)
-                .setColor(config.color);
-
-            const row = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId(`add_stock_${id}`).setLabel('Add Estoque').setStyle(ButtonStyle.Success),
-                new ButtonBuilder().setCustomId(`clear_stock_${id}`).setLabel('Limpar Estoque').setStyle(ButtonStyle.Danger)
-            );
-            await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
         }
 
         if (interaction.commandName === 'vender') {
             const id = interaction.options.getString('id');
-            const prod = db.get(`prod_${id}`);
-            if (!prod) return interaction.reply({ content: "❌ Produto não encontrado!", ephemeral: true });
-
-            const embed = new EmbedBuilder()
-                .setTitle(prod.nome)
-                .setDescription("Selecione uma opção abaixo para comprar.")
-                .addFields({ name: "💰 Preço", value: `R$ ${prod.preco}`, inline: true }, { name: "📦 Estoque", value: `${prod.estoque.length}`, inline: true })
-                .setColor(config.color);
-
+            if (!db.has(`prod_${id}`)) return interaction.reply({ content: "❌ Produto não encontrado.", ephemeral: true });
+            
             const row = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId(`buy_${id}`).setLabel('Comprar').setEmoji('🛒').setStyle(ButtonStyle.Success)
+                new ButtonBuilder().setCustomId(`buy_menu_${id}`).setLabel('Comprar Agora').setEmoji('🛒').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId(`manage_prod_${id}`).setLabel('⚙️ Gerenciar').setStyle(ButtonStyle.Secondary)
             );
+            await interaction.channel.send({ embeds: [getProductEmbed(id)], components: [row] });
             await interaction.reply({ content: "✅ Anúncio enviado!", ephemeral: true });
-            await interaction.channel.send({ embeds: [embed], components: [row] });
         }
     }
 
-    // 2. BOTÕES E MODAIS
+    // 2. BOTÕES
     if (interaction.isButton()) {
         const parts = interaction.customId.split('_');
         const action = parts[0];
-        const subAction = parts[1];
+        const sub = parts[1];
         const id = parts[2];
 
-        if (action === 'buy') {
-            const prod = db.get(`prod_${id}`);
-            if (!prod || prod.estoque.length === 0) return interaction.reply({ content: "❌ Estoque esgotado!", ephemeral: true });
-
-            if (config.pix_key === "NÃO CONFIGURADO") return interaction.reply({ content: "❌ O dono ainda não configurou a chave PIX!", ephemeral: true });
-
-            const pix_code = `00020126360014BR.GOV.BCB.PIX0114${config.pix_key}5204000053039865404${prod.preco}5802BR5908VENDEDOR6008BRASILIA62070503***6304`;
-            const qrBuffer = await qrcode.toBuffer(pix_code);
-            const attachment = new AttachmentBuilder(qrBuffer, { name: 'qrcode.png' });
-
-            const embed = new EmbedBuilder()
-                .setTitle(`Pagamento - ${prod.nome}`)
-                .addFields({ name: "Valor", value: `R$ ${prod.preco}` }, { name: "Copia e Cola", value: `\`\`\`${pix_code}\`\`\`` })
-                .setImage('attachment://qrcode.png').setColor("#FFFF00");
-
-            await interaction.reply({ embeds: [embed], files: [attachment], ephemeral: true });
+        // COMPRA PELO CLIENTE
+        if (action === 'buy' && sub === 'menu') {
+            const p = db.get(`prod_${id}`);
+            if (p.planos && p.planos.length > 0) {
+                // Menu de seleção de planos (simplificado com botões para este código)
+                const row = new ActionRowBuilder();
+                p.planos.forEach((pl, index) => {
+                    row.addComponents(new ButtonBuilder().setCustomId(`pay_plan_${id}_${index}`).setLabel(`${pl.nome} - R$ ${pl.preco}`).setStyle(ButtonStyle.Primary));
+                });
+                return interaction.reply({ content: "Escolha seu plano:", components: [row], ephemeral: true });
+            }
+            // Pagamento direto se não houver planos
+            return generatePayment(interaction, id, p.preco, p.nome);
         }
 
-        if (action === 'add' && subAction === 'stock') {
-            const modal = new ModalBuilder().setCustomId(`modal_add_stock_${id}`).setTitle('Adicionar ao Estoque');
-            modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('itens').setLabel('Itens (um por linha)').setStyle(TextInputStyle.Paragraph).setRequired(true)));
+        // GERENCIAMENTO PELO ADMIN
+        if (action === 'manage' && sub === 'prod') {
+            const p = db.get(`prod_${id}`);
+            const embed = new EmbedBuilder().setTitle(`🛠️ Editando: ${p.nome}`).setColor(config.color);
+            const row1 = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`edit_info_${id}`).setLabel('Editar Info').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId(`add_plan_${id}`).setLabel('Add Plano').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId(`manage_stock_${id}`).setLabel('Estoque').setStyle(ButtonStyle.Success)
+            );
+            const row2 = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`del_prod_${id}`).setLabel('Excluir Produto').setStyle(ButtonStyle.Danger)
+            );
+            await interaction.reply({ embeds: [embed], components: [row1, row2], ephemeral: true });
+        }
+
+        if (action === 'manage' && sub === 'stock') {
+            const modal = new ModalBuilder().setCustomId(`modal_stock_${id}`).setTitle('Gerenciar Estoque');
+            modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('itens').setLabel('Cole os itens (um por linha)').setStyle(TextInputStyle.Paragraph).setRequired(true)));
             await interaction.showModal(modal);
         }
-
-        if (interaction.customId === 'edit_pix') {
-            const modal = new ModalBuilder().setCustomId('modal_conf_pix').setTitle('Configurar PIX');
+        
+        if (interaction.customId === 'conf_pix') {
+            const modal = new ModalBuilder().setCustomId('modal_pix').setTitle('Configurar PIX');
             modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('pix').setLabel('Chave PIX').setStyle(TextInputStyle.Short).setRequired(true)));
             await interaction.showModal(modal);
         }
     }
 
+    // 3. MODAIS
     if (interaction.type === InteractionType.ModalSubmit) {
-        if (interaction.customId === 'modal_criar') {
+        if (interaction.customId === 'modal_criar_full') {
             const id = interaction.fields.getTextInputValue('id');
-            const nome = interaction.fields.getTextInputValue('nome');
-            const preco = interaction.fields.getTextInputValue('preco');
-            db.set(`prod_${id}`, { id, nome, preco, estoque: [] });
-            await interaction.reply({ content: `✅ Produto **${nome}** criado! Use \`/vender ${id}\` para anunciar.`, ephemeral: true });
+            db.set(`prod_${id}`, { 
+                id, 
+                nome: interaction.fields.getTextInputValue('nome'), 
+                preco: interaction.fields.getTextInputValue('preco'), 
+                desc: interaction.fields.getTextInputValue('desc'),
+                estoque: [], planos: [] 
+            });
+            await interaction.reply({ content: "✅ Produto criado com sucesso!", ephemeral: true });
         }
 
-        if (interaction.customId.startsWith('modal_add_stock_')) {
-            const id = interaction.customId.replace('modal_add_stock_', '');
-            const itens = interaction.fields.getTextInputValue('itens').split('\n').filter(i => i.trim() !== "");
-            const prod = db.get(`prod_${id}`);
-            prod.estoque.push(...itens);
-            db.set(`prod_${id}`, prod);
-            await interaction.reply({ content: `✅ ${itens.length} itens adicionados ao estoque de **${prod.nome}**!`, ephemeral: true });
-        }
-
-        if (interaction.customId === 'modal_conf_pix') {
-            const novaPix = interaction.fields.getTextInputValue('pix');
-            db.set('config.pix', novaPix);
-            config.pix_key = novaPix;
+        if (interaction.customId === 'modal_pix') {
+            const pix = interaction.fields.getTextInputValue('pix');
+            db.set('config.pix', pix);
+            config.pix_key = pix;
             await interaction.reply({ content: "✅ Chave PIX atualizada!", ephemeral: true });
+        }
+
+        if (interaction.customId.startsWith('modal_stock_')) {
+            const id = interaction.customId.replace('modal_stock_', '');
+            const itens = interaction.fields.getTextInputValue('itens').split('\n').filter(i => i.trim() !== "");
+            const p = db.get(`prod_${id}`);
+            p.estoque.push(...itens);
+            db.set(`prod_${id}`, p);
+            await interaction.reply({ content: `✅ ${itens.length} itens adicionados ao estoque!`, ephemeral: true });
         }
     }
 });
+
+async function generatePayment(interaction, id, preco, nome) {
+    if (config.pix_key === "NÃO CONFIGURADO") return interaction.reply({ content: "❌ PIX não configurado.", ephemeral: true });
+    const pix_code = `00020126360014BR.GOV.BCB.PIX0114${config.pix_key}5204000053039865404${preco}5802BR5908VENDEDOR6008BRASILIA62070503***6304`;
+    const qr = await qrcode.toBuffer(pix_code);
+    const embed = new EmbedBuilder()
+        .setTitle(`Pagamento: ${nome}`)
+        .setDescription(`Valor: **R$ ${preco}**\n\nCopie o código abaixo:`)
+        .addFields({ name: "Copia e Cola", value: `\`\`\`${pix_code}\`\`\`` })
+        .setImage('attachment://qr.png').setColor("#FFFF00");
+    await interaction.reply({ embeds: [embed], files: [new AttachmentBuilder(qr, { name: 'qr.png' })], ephemeral: true });
+}
 
 client.login(config.token);
