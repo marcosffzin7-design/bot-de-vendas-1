@@ -8,9 +8,9 @@ const db = new JsonDatabase({ databasePath: "./database.json" });
 
 // --- CONFIGURAÇÃO ---
 const config = {
-    token: process.env.TOKEN || "SEU_TOKEN_AQUI",
-    client_id: process.env.CLIENT_ID || "ID_DO_BOT",
-    owner_id: process.env.OWNER_ID || "SEU_ID",
+    token: process.env.TOKEN || "MTUxNjUzMjg3MjA1MDM3Njg0NA.G0lOd_.fJBN5pZ6WrWnJ6H6tGVmruZ7mPd9Uny2OFAFUw",
+    client_id: process.env.CLIENT_ID || "1516532872050376844",
+    owner_id: process.env.OWNER_ID || "1385438838670889042",
     pix_key: db.get('config.pix') || "NÃO CONFIGURADO",
     bot_name: db.get('config.name') || "SZZ VENDAS PRO",
     color: db.get('config.color') || "#00FF00"
