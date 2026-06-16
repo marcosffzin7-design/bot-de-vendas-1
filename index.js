@@ -1,138 +1,160 @@
-const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, InteractionType } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, InteractionType, AttachmentBuilder, SlashCommandBuilder, REST, Routes } = require('discord.js');
 const { JsonDatabase } = require('wio.db');
 const express = require('express');
 const qrcode = require('qrcode');
-const axios = require('axios');
-const path = require('path');
 
 // --- BANCO DE DADOS ---
 const db = new JsonDatabase({ databasePath: "./database.json" });
 
 // --- CONFIGURAÇÃO ---
 const config = {
-    token: process.env.TOKEN || "MTUxNjUzMjg3MjA1MDM3Njg0NA.GsQ_i-.TXZE3EOm5Kz_6BmL3lfskmTDZRHQsBJ3XuMyeQ",
-    pix_key: process.env.PIX_KEY || "SUA_CHAVE_PIX",
-    owner_id: process.env.OWNER_ID || "1385438838670889042",
-    color: "#00FF00"
+    token: process.env.TOKEN || "SEU_TOKEN_AQUI",
+    client_id: process.env.CLIENT_ID || "ID_DO_BOT",
+    owner_id: process.env.OWNER_ID || "SEU_ID",
+    pix_key: db.get('config.pix') || "NÃO CONFIGURADO",
+    bot_name: db.get('config.name') || "SZZ VENDAS PRO",
+    color: db.get('config.color') || "#00FF00"
 };
 
-// --- WEB SERVER (KEEP ALIVE) ---
+// --- WEB SERVER ---
 const app = express();
-app.get('/', (req, res) => res.send('Bot de Vendas Online!'));
+app.get('/', (req, res) => res.send('Bot Online!'));
 app.listen(process.env.PORT || 8080);
 
-// --- CLIENT DISCORD ---
-const client = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
-});
+// --- CLIENT ---
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 
-client.once('ready', () => {
-    console.log(`✅ Logado como ${client.user.tag}`);
-});
+// --- REGISTRO DE SLASH COMMANDS ---
+const commands = [
+    new SlashCommandBuilder().setName('config').setDescription('Painel de configuração geral do bot'),
+    new SlashCommandBuilder().setName('criar').setDescription('Criar um novo produto'),
+    new SlashCommandBuilder().setName('gerenciar').setDescription('Abrir painel de gerenciamento de um produto').addStringOption(opt => opt.setName('id').setDescription('ID do produto').setRequired(true)),
+    new SlashCommandBuilder().setName('vender').setDescription('Enviar anúncio de venda de um produto').addStringOption(opt => opt.setName('id').setDescription('ID do produto').setRequired(true))
+].map(command => command.toJSON());
 
-// --- COMANDOS ---
-client.on('messageCreate', async (message) => {
-    if (message.author.bot || !message.content.startsWith('!')) return;
+const rest = new REST({ version: '10' }).setToken(config.token);
 
-    const args = message.content.slice(1).trim().split(/ +/);
-    const command = args.shift().toLowerCase();
+(async () => {
+    try {
+        console.log('🔄 Registrando comandos (/)...');
+        await rest.put(Routes.applicationCommands(config.client_id), { body: commands });
+        console.log('✅ Comandos registrados!');
+    } catch (error) { console.error(error); }
+})();
 
-    // 1. SETUP PIX
-    if (command === 'setup_pix' && message.author.id === config.owner_id) {
-        const modal = new ModalBuilder()
-            .setCustomId('modal_setup_pix')
-            .setTitle('Configurar PIX');
+client.once('ready', () => console.log(`🚀 ${client.user.tag} está online!`));
 
-        const input = new TextInputBuilder()
-            .setCustomId('pix_key')
-            .setLabel('Sua Chave PIX')
-            .setStyle(TextInputStyle.Short)
-            .setRequired(true);
-
-        modal.addComponents(new ActionRowBuilder().addComponents(input));
-        // Nota: Modais só funcionam via Interaction. Para comando de texto, usamos um botão.
-        const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('btn_open_setup').setLabel('Abrir Configuração').setStyle(ButtonStyle.Primary)
-        );
-        return message.reply({ content: 'Clique abaixo para configurar:', components: [row] });
-    }
-
-    // 2. CRIAR PRODUTO
-    if (command === 'criar' && message.author.id === config.owner_id) {
-        const [id, preco, ...nomeArray] = args;
-        const nome = nomeArray.join(' ');
-
-        if (!id || !preco || !nome) return message.reply('Uso: `!criar [id] [preço] [nome]`');
-
-        db.set(`prod_${id}`, { id, preco, nome, estoque: [] });
-        
-        const embed = new EmbedBuilder()
-            .setTitle(nome)
-            .setDescription(`💰 Preço: R$ ${preco}\n📦 Estoque: 0`)
-            .setColor(config.color);
-
-        const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId(`buy_${id}`).setLabel('Comprar').setStyle(ButtonStyle.Success)
-        );
-
-        message.channel.send({ embeds: [embed], components: [row] });
-    }
-
-    // 3. ADICIONAR ESTOQUE
-    if (command === 'add' && message.author.id === config.owner_id) {
-        const [id, ...conteudo] = args;
-        if (!id || conteudo.length === 0) return message.reply('Uso: `!add [id] [conteúdo]`');
-
-        if (!db.has(`prod_${id}`)) return message.reply('Produto não encontrado!');
-
-        db.push(`prod_${id}.estoque`, conteudo.join(' '));
-        message.reply(`✅ Item adicionado ao estoque de \`${id}\`!`);
-    }
-});
-
-// --- INTERAÇÕES (BOTÕES E MODAIS) ---
+// --- INTERAÇÕES ---
 client.on('interactionCreate', async (interaction) => {
-    if (interaction.isButton()) {
-        if (interaction.customId === 'btn_open_setup') {
-            const modal = new ModalBuilder().setCustomId('modal_setup_pix').setTitle('Configurar PIX');
-            const input = new TextInputBuilder().setCustomId('pix_key').setLabel('Sua Chave PIX').setStyle(TextInputStyle.Short).setRequired(true);
-            modal.addComponents(new ActionRowBuilder().addComponents(input));
-            return await interaction.showModal(modal);
-        }
+    // 1. SLASH COMMANDS
+    if (interaction.isChatInputCommand()) {
+        if (interaction.user.id !== config.owner_id) return interaction.reply({ content: "❌ Apenas o dono pode usar este comando.", ephemeral: true });
 
-        if (interaction.customId.startsWith('buy_')) {
-            const id = interaction.customId.replace('buy_', '');
-            const prod = db.get(`prod_${id}`);
-
-            if (prod.estoque.length === 0) return interaction.reply({ content: '❌ Estoque esgotado!', ephemeral: true });
-
-            // Simulação de geração de PIX (Copia e Cola estático para simplicidade)
-            // Em um sistema real, você usaria uma API de pagamento.
-            const pix_msg = `00020126360014BR.GOV.BCB.PIX0114${config.pix_key}5204000053039865404${prod.preco}5802BR5908VENDEDOR6008BRASILIA62070503***6304`;
-            
+        if (interaction.commandName === 'config') {
             const embed = new EmbedBuilder()
-                .setTitle('Pagamento PIX')
-                .setDescription(`Você está comprando: **${prod.nome}**\nValor: **R$ ${prod.preco}**\n\nCopie o código abaixo para pagar:`)
-                .addFields({ name: 'Copia e Cola', value: `\`\`\`${pix_msg}\`\`\`` })
-                .setColor('#FFFF00');
-
+                .setTitle(`⚙️ Configurações - ${config.bot_name}`)
+                .addFields(
+                    { name: "🔑 Chave PIX", value: `\`${config.pix_key}\``, inline: true },
+                    { name: "🎨 Cor", value: `\`${config.color}\``, inline: true }
+                )
+                .setColor(config.color);
             const row = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId(`confirm_${id}`).setLabel('Já Paguei').setStyle(ButtonStyle.Primary)
+                new ButtonBuilder().setCustomId('edit_pix').setLabel('Editar PIX').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('edit_visual').setLabel('Editar Nome/Cor').setStyle(ButtonStyle.Secondary)
             );
-
             await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
         }
 
-        if (interaction.customId.startsWith('confirm_')) {
-            await interaction.reply({ content: '📩 Envie o comprovante para um administrador aprovar.', ephemeral: true });
+        if (interaction.commandName === 'criar') {
+            const modal = new ModalBuilder().setCustomId('modal_criar').setTitle('Novo Produto');
+            modal.addComponents(
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('id').setLabel('ID do Produto').setStyle(TextInputStyle.Short).setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('nome').setLabel('Nome').setStyle(TextInputStyle.Short).setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('preco').setLabel('Preço').setStyle(TextInputStyle.Short).setRequired(true))
+            );
+            await interaction.showModal(modal);
+        }
+
+        if (interaction.commandName === 'gerenciar') {
+            const id = interaction.options.getString('id');
+            const prod = db.get(`prod_${id}`);
+            if (!prod) return interaction.reply({ content: "❌ Produto não encontrado!", ephemeral: true });
+
+            const embed = new EmbedBuilder()
+                .setTitle(`🛠️ Gerenciar: ${prod.nome}`)
+                .setDescription(`ID: \`${id}\` | Preço: \`R$ ${prod.preco}\` | Estoque: \`${prod.estoque.length}\``)
+                .setColor(config.color);
+
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`add_stock_${id}`).setLabel('Add Estoque').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId(`clear_stock_${id}`).setLabel('Limpar Estoque').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId(`edit_prod_${id}`).setLabel('Editar Info').setStyle(ButtonStyle.Secondary)
+            );
+            await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
+        }
+
+        if (interaction.commandName === 'vender') {
+            const id = interaction.options.getString('id');
+            const prod = db.get(`prod_${id}`);
+            if (!prod) return interaction.reply({ content: "❌ Produto não encontrado!", ephemeral: true });
+
+            const embed = new EmbedBuilder()
+                .setTitle(prod.nome)
+                .setDescription("Selecione uma opção abaixo para comprar.")
+                .addFields({ name: "💰 Preço", value: `R$ ${prod.preco}`, inline: true }, { name: "📦 Estoque", value: `${prod.estoque.length}`, inline: true })
+                .setColor(config.color);
+
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`buy_${id}`).setLabel('Comprar').setEmoji('🛒').setStyle(ButtonStyle.Success)
+            );
+            await interaction.reply({ content: "✅ Anúncio enviado!", ephemeral: true });
+            await interaction.channel.send({ embeds: [embed], components: [row] });
+        }
+    }
+
+    // 2. BOTÕES E MODAIS (Lógica de Venda e Gestão)
+    if (interaction.isButton()) {
+        const [action, subAction, id] = interaction.customId.split('_');
+
+        if (action === 'buy') {
+            const prod = db.get(`prod_${id}`);
+            if (prod.estoque.length === 0) return interaction.reply({ content: "❌ Estoque esgotado!", ephemeral: true });
+
+            const pix_code = `00020126360014BR.GOV.BCB.PIX0114${config.pix_key}5204000053039865404${prod.preco}5802BR5908VENDEDOR6008BRASILIA62070503***6304`;
+            const qrBuffer = await qrcode.toBuffer(pix_code);
+            const attachment = new AttachmentBuilder(qrBuffer, { name: 'qrcode.png' });
+
+            const embed = new EmbedBuilder()
+                .setTitle(`Pagamento - ${prod.nome}`)
+                .addFields({ name: "Valor", value: `R$ ${prod.preco}` }, { name: "Copia e Cola", value: `\`\`\`${pix_code}\`\`\`` })
+                .setImage('attachment://qrcode.png').setColor("#FFFF00");
+
+            await interaction.reply({ embeds: [embed], files: [attachment], ephemeral: true });
+        }
+
+        if (action === 'add' && subAction === 'stock') {
+            const modal = new ModalBuilder().setCustomId(`modal_add_stock_${id}`).setTitle('Adicionar ao Estoque');
+            modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('itens').setLabel('Itens (um por linha)').setStyle(TextInputStyle.Paragraph).setRequired(true)));
+            await interaction.showModal(modal);
         }
     }
 
     if (interaction.type === InteractionType.ModalSubmit) {
-        if (interaction.customId === 'modal_setup_pix') {
-            const novaChave = interaction.fields.getTextInputValue('pix_key');
-            config.pix_key = novaChave;
-            await interaction.reply({ content: `✅ Chave PIX atualizada para: \`${novaChave}\``, ephemeral: true });
+        if (interaction.customId === 'modal_criar') {
+            const id = interaction.fields.getTextInputValue('id');
+            const nome = interaction.fields.getTextInputValue('nome');
+            const preco = interaction.fields.getTextInputValue('preco');
+            db.set(`prod_${id}`, { id, nome, preco, estoque: [] });
+            await interaction.reply({ content: `✅ Produto **${nome}** criado!`, ephemeral: true });
+        }
+
+        if (interaction.customId.startsWith('modal_add_stock_')) {
+            const id = interaction.customId.replace('modal_add_stock_', '');
+            const itens = interaction.fields.getTextInputValue('itens').split('\n');
+            const prod = db.get(`prod_${id}`);
+            prod.estoque.push(...itens);
+            db.set(`prod_${id}`, prod);
+            await interaction.reply({ content: `✅ ${itens.length} itens adicionados ao estoque de **${prod.nome}**!`, ephemeral: true });
         }
     }
 });
