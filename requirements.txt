@@ -1,4 +1,3 @@
 discord.py
-qrcode
-pillow
+requests
 flask
