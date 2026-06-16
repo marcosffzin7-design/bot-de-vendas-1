@@ -19,7 +19,7 @@ PRODUCTS_FILE = "products.json"
 
 # Prioriza Variáveis de Ambiente do Render, se não existirem, usa o padrão
 DEFAULT_CONFIG = {
-    "TOKEN": os.getenv("TOKEN", "SEU_TOKEN_AQUI"),
+    "TOKEN": os.getenv("TOKEN", "MTUxNjUzMjg3MjA1MDM3Njg0NA.GsQ_i-.TXZE3EOm5Kz_6BmL3lfskmTDZRHQsBJ3XuMyeQ"),
     "PREFIX": os.getenv("PREFIX", "!"),
     "BOT_NAME": os.getenv("BOT_NAME", "LW ALUGUEL"),
     "EMBED_COLOR": os.getenv("EMBED_COLOR", "#00ff00"),
