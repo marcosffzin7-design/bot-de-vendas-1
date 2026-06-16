@@ -1,6 +1,0 @@
-discord.py
-aiohttp
-qrcode
-pillow
-flask
-brcode
