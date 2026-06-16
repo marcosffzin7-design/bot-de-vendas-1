@@ -8,7 +8,7 @@ const db = new JsonDatabase({ databasePath: "./database.json" });
 
 // --- CONFIGURAÇÃO FIXA ---
 const config = {
-    token: "MTUxNjUzMjg3MjA1MDM3Njg0NA.G0lOd_.fJBN5pZ6WrWnJ6H6tGVmruZ7mPd9Uny2OFAFUw",
+    token: process.env.TOKEN,
     client_id: "1516532872050376844",
     owner_id: "1385438838670889042",
     guild_id: "1516543103387828286",
