@@ -5,6 +5,7 @@ import os
 import sqlite3
 import json
 import qrcode
+import datetime
 from io import BytesIO
 from flask import Flask
 from threading import Thread
@@ -13,7 +14,7 @@ from threading import Thread
 TOKEN = os.getenv("TOKEN", "").strip()
 OWNER_ID = 1385438838670889042
 GUILD_ID = 1516543103387828286
-BOT_NAME = "LW ALUGUEL ULTRA"
+BOT_NAME = "LW ALUGUEL SUPREME"
 
 # --- GERADOR DE PIX OFICIAL (CRC16/EMV) ---
 class PixGenerator:
@@ -48,26 +49,40 @@ class PixGenerator:
         res = "".join(payload) + "6304"
         return res + self._crc16(res)
 
-# --- BANCO DE DADOS ---
+# --- BANCO DE DADOS SUPREME ---
 def init_db():
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
+    # Produtos e Planos
     cursor.execute('''CREATE TABLE IF NOT EXISTS products 
-                      (id TEXT PRIMARY KEY, name TEXT, price REAL, description TEXT, stock TEXT)''')
+                      (id TEXT PRIMARY KEY, name TEXT, description TEXT, banner TEXT, thumb TEXT)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS plans 
+                      (id INTEGER PRIMARY KEY AUTOINCREMENT, product_id TEXT, name TEXT, price REAL, stock TEXT)''')
+    # Cupons
+    cursor.execute('''CREATE TABLE IF NOT EXISTS coupons 
+                      (code TEXT PRIMARY KEY, discount REAL, type TEXT)''') # type: percentage or fixed
+    # Configurações e Logs
     cursor.execute('''CREATE TABLE IF NOT EXISTS config 
                       (key TEXT PRIMARY KEY, value TEXT)''')
+    # Vendas
+    cursor.execute('''CREATE TABLE IF NOT EXISTS sales 
+                      (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, product_name TEXT, plan_name TEXT, price REAL, date TEXT)''')
     conn.commit(); conn.close()
 
-def get_db_val(key):
+def db_query(query, params=(), fetchone=False, fetchall=False):
     conn = sqlite3.connect('database.db'); c = conn.cursor()
-    c.execute("SELECT value FROM config WHERE key=?", (key,))
-    row = c.fetchone(); conn.close()
-    return row[0] if row else None
+    c.execute(query, params)
+    res = None
+    if fetchone: res = c.fetchone()
+    elif fetchall: res = c.fetchall()
+    else: conn.commit()
+    conn.close()
+    return res
 
 # --- WEB SERVER ---
 app = Flask('')
 @app.route('/')
-def home(): return "Bot Ultra Online!"
+def home(): return "LW SUPREME ONLINE!"
 Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.getenv("PORT", 8080))), daemon=True).start()
 
 # --- BOT ---
@@ -81,122 +96,153 @@ class LWBot(commands.Bot):
 
 bot = LWBot()
 
-# --- INTERFACE DE LUXO ---
-class ProductManageView(discord.ui.View):
+# --- INTERFACES SUPREME ---
+
+class PlanSelectView(discord.ui.View):
+    def __init__(self, product_id):
+        super().__init__(timeout=None)
+        self.product_id = product_id
+        plans = db_query("SELECT id, name, price, stock FROM plans WHERE product_id=?", (product_id,), fetchall=True)
+        for p in plans:
+            stock_count = len(json.loads(p[3]))
+            btn = discord.ui.Button(label=f"{p[1]} - R$ {p[2]:.2f} ({stock_count} em estoque)", 
+                                    style=discord.ButtonStyle.secondary, custom_id=f"plan_{p[0]}", disabled=(stock_count == 0))
+            btn.callback = self.make_callback(p)
+            self.add_item(btn)
+
+    def make_callback(self, plan):
+        async def callback(interaction: discord.Interaction):
+            chave = db_query("SELECT value FROM config WHERE key='pix_key'", fetchone=True)
+            if not chave: return await interaction.response.send_message("❌ PIX não configurado.", ephemeral=True)
+            
+            pix = PixGenerator(chave[0], plan[2])
+            payload = pix.generate()
+            qr = qrcode.make(payload); buf = BytesIO(); qr.save(buf, format="PNG"); buf.seek(0)
+            
+            e = discord.Embed(title="💳 Pagamento Gerado", description=f"Produto: **{plan[1]}**\nValor: **R$ {plan[2]:.2f}**", color=0xFFFF00)
+            e.add_field(name="Copia e Cola", value=f"```\n{payload}\n```")
+            e.set_image(url="attachment://qr.png")
+            
+            view = discord.ui.View()
+            confirm_btn = discord.ui.Button(label="Já Paguei / Enviar Comprovante", style=discord.ButtonStyle.success)
+            async def confirm_cb(i):
+                log_channel_id = db_query("SELECT value FROM config WHERE key='log_channel'", fetchone=True)
+                if log_channel_id:
+                    channel = bot.get_channel(int(log_channel_id[0]))
+                    if channel:
+                        await channel.send(f"🔔 **NOVA TENTATIVA DE COMPRA**\nUsuário: {i.user.mention}\nProduto: {plan[1]}\nValor: R$ {plan[2]:.2f}\n*Aguardando comprovante...*")
+                await i.response.send_message("✅ Seu pedido foi enviado para análise. Envie o comprovante neste canal!", ephemeral=True)
+            confirm_btn.callback = confirm_cb; view.add_item(confirm_btn)
+            
+            await interaction.response.send_message(embed=e, file=discord.File(buf, "qr.png"), view=view, ephemeral=True)
+        return callback
+
+class AdminManageView(discord.ui.View):
     def __init__(self, prod_id):
         super().__init__(timeout=None)
         self.prod_id = prod_id
 
-    @discord.ui.button(label="Alterar Preço", style=discord.ButtonStyle.secondary, emoji="💸")
-    async def edit_price(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = discord.ui.Modal(title="Novo Preço")
-        price = discord.ui.TextInput(label="Valor (ex: 10.00)")
+    @discord.ui.button(label="Adicionar Plano", style=discord.ButtonStyle.primary, emoji="➕")
+    async def add_plan(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = discord.ui.Modal(title="Novo Plano")
+        name = discord.ui.TextInput(label="Nome do Plano (ex: Mensal)")
+        price = discord.ui.TextInput(label="Preço (ex: 15.00)")
         async def on_submit(it):
-            conn = sqlite3.connect('database.db'); c = conn.cursor()
-            c.execute("UPDATE products SET price=? WHERE id=?", (float(price.value), self.prod_id))
-            conn.commit(); conn.close()
-            await it.response.send_message("✅ Valor atualizado!", ephemeral=True)
-        modal.add_item(price); modal.on_submit = on_submit
+            db_query("INSERT INTO plans (product_id, name, price, stock) VALUES (?, ?, ?, ?)", 
+                     (self.prod_id, name.value, float(price.value), "[]"))
+            await it.response.send_message("✅ Plano adicionado!", ephemeral=True)
+        modal.add_item(name); modal.add_item(price); modal.on_submit = on_submit
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Gerenciar Estoque", style=discord.ButtonStyle.success, emoji="📦")
-    async def add_stock(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = discord.ui.Modal(title="Adicionar Estoque")
-        stock = discord.ui.TextInput(label="Itens (um por linha)", style=discord.TextStyle.paragraph)
-        async def on_submit(it):
-            conn = sqlite3.connect('database.db'); c = conn.cursor()
-            c.execute("SELECT stock FROM products WHERE id=?", (self.prod_id,))
-            current = json.loads(c.fetchone()[0])
-            new_itens = stock.value.split('\n')
-            current.extend([i for i in new_itens if i.strip()])
-            c.execute("UPDATE products SET stock=? WHERE id=?", (json.dumps(current), self.prod_id))
-            conn.commit(); conn.close()
-            await it.response.send_message(f"✅ {len(new_itens)} itens adicionados!", ephemeral=True)
-        modal.add_item(stock); modal.on_submit = on_submit
-        await interaction.response.send_modal(modal)
+    async def manage_stock(self, interaction: discord.Interaction, button: discord.ui.Button):
+        plans = db_query("SELECT id, name FROM plans WHERE product_id=?", (self.prod_id,), fetchall=True)
+        if not plans: return await interaction.response.send_message("❌ Adicione um plano primeiro.", ephemeral=True)
+        
+        view = discord.ui.View()
+        for p in plans:
+            btn = discord.ui.Button(label=f"Estoque: {p[1]}", style=discord.ButtonStyle.secondary)
+            async def cb(i, plan_id=p[0]):
+                modal = discord.ui.Modal(title="Adicionar Itens")
+                items = discord.ui.TextInput(label="Itens (um por linha)", style=discord.TextStyle.paragraph)
+                async def sub(it):
+                    current = json.loads(db_query("SELECT stock FROM plans WHERE id=?", (plan_id,), fetchone=True)[0])
+                    new_list = items.value.split('\n')
+                    current.extend([x for x in new_list if x.strip()])
+                    db_query("UPDATE plans SET stock=? WHERE id=?", (json.dumps(current), plan_id))
+                    await it.response.send_message(f"✅ {len(new_list)} itens adicionados!", ephemeral=True)
+                modal.add_item(items); modal.on_submit = sub
+                await i.response.send_modal(modal)
+            btn.callback = cb; view.add_item(btn)
+        await interaction.response.send_message("Escolha o plano para adicionar estoque:", view=view, ephemeral=True)
 
-# --- COMANDOS ---
-@bot.tree.command(name="painel", description="Configurações do Bot")
+# --- COMANDOS SUPREME ---
+
+@bot.tree.command(name="painel", description="Configurações Supreme")
 async def painel(interaction: discord.Interaction):
     if interaction.user.id != OWNER_ID: return await interaction.response.send_message("❌", ephemeral=True)
-    pix = get_db_val("pix_key") or "NÃO CONFIGURADO"
-    embed = discord.Embed(title=f"💎 Central {BOT_NAME}", description=f"Sua Chave PIX: `{pix}`", color=0x00FF00)
+    pix = db_query("SELECT value FROM config WHERE key='pix_key'", fetchone=True)
+    logs = db_query("SELECT value FROM config WHERE key='log_channel'", fetchone=True)
+    
+    embed = discord.Embed(title=f"👑 Dashboard Supreme - {BOT_NAME}", color=0x00FF00)
+    embed.add_field(name="🔑 PIX", value=f"`{pix[0] if pix else 'N/A'}`")
+    embed.add_field(name="📺 Canal Logs", value=f"<#{logs[0]}>" if logs else "`N/A`")
+    
     view = discord.ui.View()
-    btn = discord.ui.Button(label="Mudar Chave PIX", style=discord.ButtonStyle.primary, emoji="🔑")
-    async def set_pix(i):
-        modal = discord.ui.Modal(title="Configurar PIX")
-        input_pix = discord.ui.TextInput(label="Chave PIX (CPF, E-mail ou Aleatória)")
-        async def on_submit(it):
-            conn = sqlite3.connect('database.db'); c = conn.cursor()
-            c.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('pix_key', ?)", (input_pix.value,))
-            conn.commit(); conn.close()
-            await it.response.send_message("✅ Chave PIX salva!", ephemeral=True)
-        modal.add_item(input_pix); modal.on_submit = on_submit
-        await i.response.send_modal(modal)
-    btn.callback = set_pix; view.add_item(btn)
+    b1 = discord.ui.Button(label="Set PIX", style=discord.ButtonStyle.primary)
+    async def b1_cb(i):
+        modal = discord.ui.Modal(title="PIX"); inp = discord.ui.TextInput(label="Chave")
+        async def s(it): db_query("INSERT OR REPLACE INTO config (key, value) VALUES ('pix_key', ?)", (inp.value,)); await it.response.send_message("✅", ephemeral=True)
+        modal.add_item(inp); modal.on_submit = s; await i.response.send_modal(modal)
+    b1.callback = b1_cb; view.add_item(b1)
+    
+    b2 = discord.ui.Button(label="Set Logs", style=discord.ButtonStyle.primary)
+    async def b2_cb(i):
+        modal = discord.ui.Modal(title="Logs"); inp = discord.ui.TextInput(label="ID do Canal")
+        async def s(it): db_query("INSERT OR REPLACE INTO config (key, value) VALUES ('log_channel', ?)", (inp.value,)); await it.response.send_message("✅", ephemeral=True)
+        modal.add_item(inp); modal.on_submit = s; await i.response.send_modal(modal)
+    b2.callback = b2_cb; view.add_item(b2)
+    
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-@bot.tree.command(name="criar", description="Criar Produto")
+@bot.tree.command(name="criar", description="Criar Produto Supreme")
 async def criar(interaction: discord.Interaction):
     if interaction.user.id != OWNER_ID: return await interaction.response.send_message("❌", ephemeral=True)
     modal = discord.ui.Modal(title="Novo Produto")
     id_p = discord.ui.TextInput(label="ID"); nome = discord.ui.TextInput(label="Nome")
-    preco = discord.ui.TextInput(label="Preço"); desc = discord.ui.TextInput(label="Descrição", style=discord.TextStyle.paragraph)
+    desc = discord.ui.TextInput(label="Descrição", style=discord.TextStyle.paragraph)
     async def on_submit(it):
-        conn = sqlite3.connect('database.db'); c = conn.cursor()
-        c.execute("INSERT OR REPLACE INTO products (id, name, price, description, stock) VALUES (?, ?, ?, ?, ?)",
-                   (id_p.value, nome.value, float(preco.value), desc.value, "[]"))
-        conn.commit(); conn.close()
-        await it.response.send_message("✅ Produto Criado!", ephemeral=True)
-    for item in [id_p, nome, preco, desc]: modal.add_item(item)
-    modal.on_submit = on_submit; await interaction.response.send_modal(modal)
+        db_query("INSERT OR REPLACE INTO products (id, name, description) VALUES (?, ?, ?)", (id_p.value, nome.value, desc.value))
+        await it.response.send_message(f"✅ Produto {nome.value} criado! Agora use `/gerenciar` para adicionar planos.", ephemeral=True)
+    modal.add_item(id_p); modal.add_item(nome); modal.add_item(desc); modal.on_submit = on_submit
+    await interaction.response.send_modal(modal)
 
-@bot.tree.command(name="gerenciar", description="Gerenciar Produto")
+@bot.tree.command(name="gerenciar", description="Gerenciar Produto Supreme")
 async def gerenciar(interaction: discord.Interaction, id_produto: str):
     if interaction.user.id != OWNER_ID: return await interaction.response.send_message("❌", ephemeral=True)
-    conn = sqlite3.connect('database.db'); c = conn.cursor()
-    c.execute("SELECT name, price, stock FROM products WHERE id=?", (id_produto,))
-    p = c.fetchone(); conn.close()
+    p = db_query("SELECT name FROM products WHERE id=?", (id_produto,), fetchone=True)
     if not p: return await interaction.response.send_message("❌", ephemeral=True)
-    embed = discord.Embed(title=f"🛠️ Gerenciando: {p[0]}", description=f"💰 Preço: R$ {p[1]:.2f}\n📦 Estoque: {len(json.loads(p[2]))} itens", color=0x00AAFF)
-    await interaction.response.send_message(embed=embed, view=ProductManageView(id_produto), ephemeral=True)
+    
+    plans = db_query("SELECT name, price FROM plans WHERE product_id=?", (id_produto,), fetchall=True)
+    plan_text = "\n".join([f"🔹 {pl[0]}: R$ {pl[1]:.2f}" for pl in plans]) if plans else "Nenhum plano."
+    
+    embed = discord.Embed(title=f"🛠️ Gerenciando: {p[0]}", description=f"**Planos Ativos:**\n{plan_text}", color=0x00AAFF)
+    await interaction.response.send_message(embed=embed, view=AdminManageView(id_produto), ephemeral=True)
 
-@bot.tree.command(name="vender", description="Anunciar Produto")
+@bot.tree.command(name="vender", description="Anunciar Produto Supreme")
 async def vender(interaction: discord.Interaction, id_produto: str):
-    conn = sqlite3.connect('database.db'); c = conn.cursor()
-    c.execute("SELECT name, price, description, stock FROM products WHERE id=?", (id_produto,))
-    p = c.fetchone(); conn.close()
+    p = db_query("SELECT name, description FROM products WHERE id=?", (id_produto,), fetchone=True)
     if not p: return await interaction.response.send_message("❌", ephemeral=True)
     
-    embed = discord.Embed(title=f"🛒 {p[0]}", description=p[2], color=0x00FF00)
-    embed.add_field(name="💰 Valor", value=f"```R$ {p[1]:.2f}```", inline=True)
-    embed.add_field(name="📦 Estoque", value=f"```{len(json.loads(p[3]))}```", inline=True)
-    embed.set_footer(text=f"© {BOT_NAME} - Compra Segura")
+    embed = discord.Embed(title=f"✨ {p[0]}", description=p[1], color=0x00FF00)
+    embed.set_footer(text=f"💎 {BOT_NAME} - Escolha um plano abaixo")
     
-    view = discord.ui.View()
-    btn = discord.ui.Button(label="Comprar Agora", style=discord.ButtonStyle.success, emoji="💳")
-    async def buy(i):
-        chave = get_db_val("pix_key")
-        if not chave: return await i.response.send_message("❌ Configure o PIX no /painel", ephemeral=True)
-        
-        # Gerando PIX Real (EMV/CRC16)
-        pix = PixGenerator(chave, p[1])
-        payload = pix.generate()
-        
-        qr = qrcode.make(payload); buf = BytesIO(); qr.save(buf, format="PNG"); buf.seek(0)
-        
-        e = discord.Embed(title="💳 Pagamento Gerado", description=f"Valor: **R$ {p[1]:.2f}**\n\nCopie o código abaixo e pague no seu banco:", color=0xFFFF00)
-        e.add_field(name="Copia e Cola", value=f"```\n{payload}\n```")
-        e.set_image(url="attachment://qr.png")
-        await i.response.send_message(embed=e, file=discord.File(buf, "qr.png"), ephemeral=True)
-        
-    btn.callback = buy; view.add_item(btn)
-    await interaction.channel.send(embed=embed, view=view)
-    await interaction.response.send_message("✅ Anúncio enviado!", ephemeral=True)
+    await interaction.channel.send(embed=embed, view=PlanSelectView(id_produto))
+    await interaction.response.send_message("✅ Anúncio Supreme enviado!", ephemeral=True)
 
 @bot.event
 async def on_ready():
     init_db()
-    print(f"🚀 {bot.user.name} ONLINE com PIX Real!")
+    print(f"🚀 {bot.user.name} SUPREME ONLINE!")
 
 bot.run(TOKEN)
