@@ -6,181 +6,157 @@ const qrcode = require('qrcode');
 // --- BANCO DE DADOS ---
 const db = new JsonDatabase({ databasePath: "./database.json" });
 
-// --- CONFIGURAÇÃO (TOKEN FIXO PARA EVITAR ERROS) ---
+// --- CONFIGURAÇÃO ---
 const config = {
-    token: "MTUxNjUzMjg3MjA1MDM3Njg0NA.G0lOd_.fJBN5pZ6WrWnJ6H6tGVmruZ7mPd9Uny2OFAFUw",
-    owner_id: "1385438838670889042",
+    token: process.env.TOKEN || "SEU_TOKEN_AQUI",
+    client_id: process.env.CLIENT_ID || "ID_DO_BOT",
+    owner_id: process.env.OWNER_ID || "SEU_ID",
     pix_key: db.get('config.pix') || "NÃO CONFIGURADO",
-    bot_name: "LW ALUGUEL",
+    bot_name: db.get('config.name') || "SZZ VENDAS PRO",
     color: db.get('config.color') || "#00FF00"
 };
 
-// --- WEB SERVER (KEEP ALIVE) ---
+// --- WEB SERVER ---
 const app = express();
-app.get('/', (req, res) => res.send('Super Bot LW ALUGUEL Online!'));
+app.get('/', (req, res) => res.send('Bot Online!'));
 app.listen(process.env.PORT || 8080);
 
 // --- CLIENT ---
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers] });
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 
-// --- REGISTRO DE COMANDOS ---
+// --- REGISTRO DE SLASH COMMANDS ---
 const commands = [
-    new SlashCommandBuilder().setName('painel').setDescription('Abre o painel principal de gerenciamento'),
-    new SlashCommandBuilder().setName('criar').setDescription('Cria um novo produto profissional'),
-    new SlashCommandBuilder().setName('vender').setDescription('Envia o anúncio de um produto').addStringOption(o => o.setName('id').setDescription('ID do produto').setRequired(true))
-].map(c => c.toJSON());
+    new SlashCommandBuilder().setName('config').setDescription('Painel de configuração geral do bot'),
+    new SlashCommandBuilder().setName('criar').setDescription('Criar um novo produto'),
+    new SlashCommandBuilder().setName('gerenciar').setDescription('Abrir painel de gerenciamento de um produto').addStringOption(opt => opt.setName('id').setDescription('ID do produto').setRequired(true)),
+    new SlashCommandBuilder().setName('vender').setDescription('Enviar anúncio de venda de um produto').addStringOption(opt => opt.setName('id').setDescription('ID do produto').setRequired(true))
+].map(command => command.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(config.token);
 
-client.once('ready', async () => {
+(async () => {
     try {
-        console.log('🔄 Registrando comandos globais...');
-        await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
-        console.log(`🚀 ${client.user.tag} ONLINE e Comandos Registrados!`);
-    } catch (e) { console.error('Erro ao registrar comandos:', e); }
-});
+        console.log('🔄 Registrando comandos (/)...');
+        await rest.put(Routes.applicationCommands(config.client_id), { body: commands });
+        console.log('✅ Comandos registrados!');
+    } catch (error) { console.error(error); }
+})();
 
-// --- FUNÇÕES AUXILIARES ---
-const getProductEmbed = (id) => {
-    const p = db.get(`prod_${id}`);
-    if (!p) return new EmbedBuilder().setTitle("Erro").setDescription("Produto não encontrado.");
-    
-    return new EmbedBuilder()
-        .setTitle(p.nome)
-        .setDescription(p.desc || "Sem descrição.")
-        .addFields(
-            { name: "💰 Preço", value: `R$ ${p.preco}`, inline: true },
-            { name: "📦 Estoque", value: `${p.estoque ? p.estoque.length : 0}`, inline: true }
-        )
-        .setColor(config.color)
-        .setThumbnail(p.thumb || null)
-        .setImage(p.banner || null);
-};
+client.once('ready', () => console.log(`🚀 ${client.user.tag} está online!`));
 
 // --- INTERAÇÕES ---
 client.on('interactionCreate', async (interaction) => {
     // 1. SLASH COMMANDS
     if (interaction.isChatInputCommand()) {
-        if (interaction.user.id !== config.owner_id) return interaction.reply({ content: "❌ Sem permissão.", ephemeral: true });
+        if (interaction.user.id !== config.owner_id) return interaction.reply({ content: "❌ Apenas o dono pode usar este comando.", ephemeral: true });
 
-        if (interaction.commandName === 'painel') {
+        if (interaction.commandName === 'config') {
             const embed = new EmbedBuilder()
-                .setTitle(`💎 Central de Comando - ${config.bot_name}`)
-                .setDescription("Gerencie seu bot e visualize estatísticas.")
+                .setTitle(`⚙️ Configurações - ${config.bot_name}`)
                 .addFields(
-                    { name: "🔑 PIX", value: `\`${config.pix_key}\``, inline: true },
-                    { name: "📦 Produtos", value: `\`${Object.keys(db.all()).filter(k => k.startsWith('prod_')).length}\``, inline: true }
-                ).setColor(config.color);
+                    { name: "🔑 Chave PIX", value: `\`${config.pix_key}\``, inline: true },
+                    { name: "🎨 Cor", value: `\`${config.color}\``, inline: true }
+                )
+                .setColor(config.color);
             const row = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId('conf_pix').setLabel('Configurar PIX').setStyle(ButtonStyle.Primary),
-                new ButtonBuilder().setCustomId('conf_visual').setLabel('Personalizar Bot').setStyle(ButtonStyle.Secondary)
+                new ButtonBuilder().setCustomId('edit_pix').setLabel('Editar PIX').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('edit_visual').setLabel('Editar Nome/Cor').setStyle(ButtonStyle.Secondary)
             );
             await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
         }
 
         if (interaction.commandName === 'criar') {
-            const modal = new ModalBuilder().setCustomId('modal_criar_full').setTitle('Criar Produto Profissional');
+            const modal = new ModalBuilder().setCustomId('modal_criar').setTitle('Novo Produto');
             modal.addComponents(
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('id').setLabel('ID Único').setStyle(TextInputStyle.Short).setRequired(true)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('nome').setLabel('Nome do Produto').setStyle(TextInputStyle.Short).setRequired(true)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('preco').setLabel('Preço Base').setStyle(TextInputStyle.Short).setRequired(true)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('desc').setLabel('Descrição Completa').setStyle(TextInputStyle.Paragraph).setRequired(true))
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('id').setLabel('ID do Produto').setStyle(TextInputStyle.Short).setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('nome').setLabel('Nome').setStyle(TextInputStyle.Short).setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('preco').setLabel('Preço').setStyle(TextInputStyle.Short).setRequired(true))
             );
             await interaction.showModal(modal);
         }
 
-        if (interaction.commandName === 'vender') {
+        if (interaction.commandName === 'gerenciar') {
             const id = interaction.options.getString('id');
-            if (!db.has(`prod_${id}`)) return interaction.reply({ content: "❌ Produto não encontrado.", ephemeral: true });
-            
+            const prod = db.get(`prod_${id}`);
+            if (!prod) return interaction.reply({ content: "❌ Produto não encontrado!", ephemeral: true });
+
+            const embed = new EmbedBuilder()
+                .setTitle(`🛠️ Gerenciar: ${prod.nome}`)
+                .setDescription(`ID: \`${id}\` | Preço: \`R$ ${prod.preco}\` | Estoque: \`${prod.estoque.length}\``)
+                .setColor(config.color);
+
             const row = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId(`buy_menu_${id}`).setLabel('Comprar Agora').setEmoji('🛒').setStyle(ButtonStyle.Success),
-                new ButtonBuilder().setCustomId(`manage_prod_${id}`).setLabel('⚙️ Gerenciar').setStyle(ButtonStyle.Secondary)
-            );
-            await interaction.channel.send({ embeds: [getProductEmbed(id)], components: [row] });
-            await interaction.reply({ content: "✅ Anúncio enviado!", ephemeral: true });
-        }
-    }
-
-    // 2. BOTÕES
-    if (interaction.isButton()) {
-        const parts = interaction.customId.split('_');
-        const action = parts[0];
-        const sub = parts[1];
-        const id = parts[2];
-
-        if (action === 'buy') {
-            const p = db.get(`prod_${id}`);
-            if (!p || p.estoque.length === 0) return interaction.reply({ content: "❌ Estoque esgotado!", ephemeral: true });
-            return generatePayment(interaction, id, p.preco, p.nome);
-        }
-
-        if (action === 'manage') {
-            if (interaction.user.id !== config.owner_id) return interaction.reply({ content: "❌ Sem permissão.", ephemeral: true });
-            const p = db.get(`prod_${id}`);
-            const embed = new EmbedBuilder().setTitle(`🛠️ Gerenciando: ${p.nome}`).setColor(config.color);
-            const row = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId(`stock_add_${id}`).setLabel('Add Estoque').setStyle(ButtonStyle.Success),
-                new ButtonBuilder().setCustomId(`stock_clear_${id}`).setLabel('Limpar Estoque').setStyle(ButtonStyle.Danger)
+                new ButtonBuilder().setCustomId(`add_stock_${id}`).setLabel('Add Estoque').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId(`clear_stock_${id}`).setLabel('Limpar Estoque').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId(`edit_prod_${id}`).setLabel('Editar Info').setStyle(ButtonStyle.Secondary)
             );
             await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
         }
 
-        if (action === 'stock' && sub === 'add') {
-            const modal = new ModalBuilder().setCustomId(`modal_stock_add_${id}`).setTitle('Adicionar Itens');
+        if (interaction.commandName === 'vender') {
+            const id = interaction.options.getString('id');
+            const prod = db.get(`prod_${id}`);
+            if (!prod) return interaction.reply({ content: "❌ Produto não encontrado!", ephemeral: true });
+
+            const embed = new EmbedBuilder()
+                .setTitle(prod.nome)
+                .setDescription("Selecione uma opção abaixo para comprar.")
+                .addFields({ name: "💰 Preço", value: `R$ ${prod.preco}`, inline: true }, { name: "📦 Estoque", value: `${prod.estoque.length}`, inline: true })
+                .setColor(config.color);
+
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`buy_${id}`).setLabel('Comprar').setEmoji('🛒').setStyle(ButtonStyle.Success)
+            );
+            await interaction.reply({ content: "✅ Anúncio enviado!", ephemeral: true });
+            await interaction.channel.send({ embeds: [embed], components: [row] });
+        }
+    }
+
+    // 2. BOTÕES E MODAIS (Lógica de Venda e Gestão)
+    if (interaction.isButton()) {
+        const [action, subAction, id] = interaction.customId.split('_');
+
+        if (action === 'buy') {
+            const prod = db.get(`prod_${id}`);
+            if (prod.estoque.length === 0) return interaction.reply({ content: "❌ Estoque esgotado!", ephemeral: true });
+
+            const pix_code = `00020126360014BR.GOV.BCB.PIX0114${config.pix_key}5204000053039865404${prod.preco}5802BR5908VENDEDOR6008BRASILIA62070503***6304`;
+            const qrBuffer = await qrcode.toBuffer(pix_code);
+            const attachment = new AttachmentBuilder(qrBuffer, { name: 'qrcode.png' });
+
+            const embed = new EmbedBuilder()
+                .setTitle(`Pagamento - ${prod.nome}`)
+                .addFields({ name: "Valor", value: `R$ ${prod.preco}` }, { name: "Copia e Cola", value: `\`\`\`${pix_code}\`\`\`` })
+                .setImage('attachment://qrcode.png').setColor("#FFFF00");
+
+            await interaction.reply({ embeds: [embed], files: [attachment], ephemeral: true });
+        }
+
+        if (action === 'add' && subAction === 'stock') {
+            const modal = new ModalBuilder().setCustomId(`modal_add_stock_${id}`).setTitle('Adicionar ao Estoque');
             modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('itens').setLabel('Itens (um por linha)').setStyle(TextInputStyle.Paragraph).setRequired(true)));
             await interaction.showModal(modal);
         }
-
-        if (interaction.customId === 'conf_pix') {
-            const modal = new ModalBuilder().setCustomId('modal_pix').setTitle('Configurar PIX');
-            modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('pix').setLabel('Chave PIX').setStyle(TextInputStyle.Short).setRequired(true)));
-            await interaction.showModal(modal);
-        }
     }
 
-    // 3. MODAIS
     if (interaction.type === InteractionType.ModalSubmit) {
-        if (interaction.customId === 'modal_criar_full') {
+        if (interaction.customId === 'modal_criar') {
             const id = interaction.fields.getTextInputValue('id');
-            db.set(`prod_${id}`, { 
-                id, 
-                nome: interaction.fields.getTextInputValue('nome'), 
-                preco: interaction.fields.getTextInputValue('preco'), 
-                desc: interaction.fields.getTextInputValue('desc'),
-                estoque: []
-            });
-            await interaction.reply({ content: "✅ Produto criado!", ephemeral: true });
+            const nome = interaction.fields.getTextInputValue('nome');
+            const preco = interaction.fields.getTextInputValue('preco');
+            db.set(`prod_${id}`, { id, nome, preco, estoque: [] });
+            await interaction.reply({ content: `✅ Produto **${nome}** criado!`, ephemeral: true });
         }
 
-        if (interaction.customId === 'modal_pix') {
-            const pix = interaction.fields.getTextInputValue('pix');
-            db.set('config.pix', pix);
-            config.pix_key = pix;
-            await interaction.reply({ content: "✅ Chave PIX atualizada!", ephemeral: true });
-        }
-
-        if (interaction.customId.startsWith('modal_stock_add_')) {
-            const id = interaction.customId.replace('modal_stock_add_', '');
-            const itens = interaction.fields.getTextInputValue('itens').split('\n').filter(i => i.trim() !== "");
-            const p = db.get(`prod_${id}`);
-            p.estoque.push(...itens);
-            db.set(`prod_${id}`, p);
-            await interaction.reply({ content: `✅ ${itens.length} itens adicionados!`, ephemeral: true });
+        if (interaction.customId.startsWith('modal_add_stock_')) {
+            const id = interaction.customId.replace('modal_add_stock_', '');
+            const itens = interaction.fields.getTextInputValue('itens').split('\n');
+            const prod = db.get(`prod_${id}`);
+            prod.estoque.push(...itens);
+            db.set(`prod_${id}`, prod);
+            await interaction.reply({ content: `✅ ${itens.length} itens adicionados ao estoque de **${prod.nome}**!`, ephemeral: true });
         }
     }
 });
-
-async function generatePayment(interaction, id, preco, nome) {
-    if (config.pix_key === "NÃO CONFIGURADO") return interaction.reply({ content: "❌ Configure o PIX no /painel primeiro.", ephemeral: true });
-    const pix_code = `00020126360014BR.GOV.BCB.PIX0114${config.pix_key}5204000053039865404${preco}5802BR5908VENDEDOR6008BRASILIA62070503***6304`;
-    const qr = await qrcode.toBuffer(pix_code);
-    const embed = new EmbedBuilder()
-        .setTitle(`Pagamento: ${nome}`)
-        .setDescription(`Valor: **R$ ${preco}**\n\nCopie o código abaixo:`)
-        .addFields({ name: "Copia e Cola", value: `\`\`\`${pix_code}\`\`\`` })
-        .setImage('attachment://qr.png').setColor("#FFFF00");
-    await interaction.reply({ embeds: [embed], files: [new AttachmentBuilder(qr, { name: 'qr.png' })], ephemeral: true });
-}
 
 client.login(config.token);
