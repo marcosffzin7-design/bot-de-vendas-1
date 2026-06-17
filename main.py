@@ -84,25 +84,90 @@ class PurchaseFlow(discord.ui.View):
 class PlanSelect(discord.ui.Select):
     def __init__(self, prod_id):
         self.prod_id = prod_id
-        plans = db_query("SELECT id, name, price, stock, fake_stock FROM plans WHERE prod_id=?", (prod_id,), fa=True)
+
+        plans = db_query(
+            "SELECT id, name, price, stock, fake_stock FROM plans WHERE prod_id=?",
+            (prod_id,),
+            fa=True
+        )
+
         options = []
+
         for p in plans:
-            display_stock = len(json.loads(p[3])) + p[4]
-            options.append(discord.SelectOption(label=f"{p[1]}", value=str(p[0]), description=f"R$ {p[2]:.2f} - Estoque: {display_stock}", emoji="💎"))
-        super().__init__(placeholder="Selecione um plano...", options=options)
+            try:
+                estoque_real = len(json.loads(p[3])) if p[3] else 0
+            except:
+                estoque_real = 0
+
+            estoque_fake = p[4] if p[4] else 0
+            estoque_total = estoque_real + estoque_fake
+
+            options.append(
+                discord.SelectOption(
+                    label=str(p[1])[:100],
+                    value=str(p[0]),
+                    description=f"R$ {float(p[2]):.2f} | Estoque: {estoque_total}"[:100],
+                    emoji="💎"
+                )
+            )
+
+        if len(options) == 0:
+            options.append(
+                discord.SelectOption(
+                    label="Nenhum plano disponível",
+                    value="sem_plano",
+                    description="Cadastre um plano usando /add_plano"
+                )
+            )
+
+        super().__init__(
+            placeholder="Selecione um plano...",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
     async def callback(self, interaction: discord.Interaction):
+        if self.values[0] == "sem_plano":
+            return await interaction.response.send_message(
+                "❌ Este produto não possui planos cadastrados.",
+                ephemeral=True
+            )
+
         try:
             await interaction.response.defer(ephemeral=True)
-            plan_id = int(self.values[0]); p = db_query("SELECT name, price FROM plans WHERE id=?", (plan_id,), f1=True)
-            e = discord.Embed(title="🛒 Carrinho", description=f"Plano: {p[0]}", color=0x2b2d31)
-            await interaction.followup.send(embed=e, view=PurchaseFlow(plan_id, interaction.user.id), ephemeral=True)
-        except Exception as e:
-            await interaction.followup.send(f"❌ Erro ao selecionar plano: {e}", ephemeral=True)
 
-class ProductView(discord.ui.View):
-    def __init__(self, prod_id):
-        super().__init__(timeout=None)
-        self.add_item(PlanSelect(prod_id))
+            plan_id = int(self.values[0])
+
+            p = db_query(
+                "SELECT name, price FROM plans WHERE id=?",
+                (plan_id,),
+                f1=True
+            )
+
+            if not p:
+                return await interaction.followup.send(
+                    "❌ Plano não encontrado.",
+                    ephemeral=True
+                )
+
+            e = discord.Embed(
+                title="🛒 Carrinho",
+                description=f"Plano: {p[0]}\n💰 Valor: R$ {p[1]:.2f}",
+                color=0x2b2d31
+            )
+
+            await interaction.followup.send(
+                embed=e,
+                view=PurchaseFlow(plan_id, interaction.user.id),
+                ephemeral=True
+            )
+
+        except Exception as e:
+            await interaction.followup.send(
+                f"❌ Erro ao selecionar plano: {e}",
+                ephemeral=True
+            )
 
 # --- COMANDOS ---
 
