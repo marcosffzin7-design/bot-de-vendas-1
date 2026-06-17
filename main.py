@@ -117,8 +117,17 @@ async def vender(interaction: discord.Interaction, id_produto: str):
         p = db_query("SELECT name, desc, banner FROM products WHERE id=?", (id_produto,), f1=True)
         if not p: return await interaction.followup.send(f"❌ Produto `{id_produto}` não encontrado!", ephemeral=True)
         
-        plans = db_query("SELECT id FROM plans WHERE prod_id=?", (id_produto,), fa=True)
-        if not plans: return await interaction.followup.send(f"❌ O produto `{id_produto}` não tem planos! Use `/add_plano` primeiro.", ephemeral=True)
+        plans = db_query(
+    "SELECT id, name FROM plans WHERE prod_id=?",
+    (id_produto,),
+    fa=True
+)
+
+if len(plans) == 0:
+    return await interaction.followup.send(
+        f"❌ O produto `{id_produto}` não possui planos cadastrados.\nUse /add_plano primeiro.",
+        ephemeral=True
+    )
         
         color_data = db_query("SELECT value FROM config WHERE key='bot_color'", f1=True)
         color = int(color_data[0].replace("#", ""), 16) if color_data else 0x2b2d31
